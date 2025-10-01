@@ -1,6 +1,6 @@
 # mitmproxy OpenPIMS Addon
 
-A mitmproxy addon that automatically adds domain-specific deterministic `x-openpims` headers to all HTTP requests and protects the proxy with HTTP Basic Auth.
+A mitmproxy addon that automatically adds domain-specific deterministic `x-openpims` headers to all HTTP requests, filters cookies based on consent data, and protects the proxy with HTTP Basic Auth.
 
 ## Features
 
@@ -8,8 +8,9 @@ A mitmproxy addon that automatically adds domain-specific deterministic `x-openp
 - 🔑 **Deterministic URLs**: HMAC-SHA256 based subdomain generation
 - 🌐 **Domain-specific**: Each visited domain gets its own OpenPIMS URL
 - 📨 **Header Injection**: Adds `x-openpims` and `X-OpenPIMS` headers to all requests
+- 🍪 **Cookie Filtering**: Filters cookies based on domain-specific consent data
 - 🔄 **Daily Rotation**: Subdomains are regenerated at midnight UTC
-- 💾 **Intelligent Caching**: Auth data is cached for 5 minutes
+- 💾 **Intelligent Caching**: Auth data and cookie consent cached for 5 minutes
 - 🛡️ **Error Handling**: Robust handling of network problems
 - ⏱️ **Retry Logic**: Waits after errors before trying again
 
@@ -37,19 +38,19 @@ cd mitmproxy-openpims-addon
 ### Basic Usage
 
 ```bash
-mitmdump -s openpims_addon.py --set username=your@email.com --set password=your_password
+mitmdump -s openpims.py --set username=your@email.com --set password=your_password
 ```
 
 ### With Web Interface
 
 ```bash
-mitmweb -s openpims_addon.py --set username=your@email.com --set password=your_password
+mitmweb -s openpims.py --set username=your@email.com --set password=your_password
 ```
 
 ### With Advanced Options
 
 ```bash
-mitmdump -s openpims_addon.py \
+mitmdump -s openpims.py \
   --set username=your@email.com \
   --set password=your_password \
   --set openpims_url=https://me.openpims.de \
@@ -70,12 +71,12 @@ mitmdump -s openpims_addon.py \
 
 ```bash
 # Minimal configuration
-mitmdump -s openpims_addon.py \
+mitmdump -s openpims.py \
   --set username=user@example.com \
   --set password=secret123
 
 # With custom URL
-mitmdump -s openpims_addon.py \
+mitmdump -s openpims.py \
   --set username=user@example.com \
   --set password=secret123 \
   --set openpims_url=https://custom-openpims.de
@@ -87,9 +88,10 @@ mitmdump -s openpims_addon.py \
 2. **Proxy Auth**: mitmproxy is protected with the provided credentials
 3. **Subdomain Generation**: A deterministic subdomain is generated for each visited domain using HMAC-SHA256
 4. **Header Injection**: `x-openpims` and `X-OpenPIMS` headers with the domain-specific URL are added to each request
-5. **Daily Rotation**: Subdomains are automatically regenerated at midnight UTC (based on day timestamp)
-6. **Auto-Update**: Auth data is refreshed from the server every 5 minutes
-7. **Error Handling**: The addon waits 60 seconds before retrying after errors
+5. **Cookie Filtering**: Fetches cookie consent data from OpenPIMS service and filters both incoming and outgoing cookies
+6. **Daily Rotation**: Subdomains are automatically regenerated at midnight UTC (based on day timestamp)
+7. **Auto-Update**: Auth data is refreshed from the server every 5 minutes
+8. **Error Handling**: The addon waits 60 seconds before retrying after errors
 
 ### Deterministic Subdomain Generation
 
@@ -100,11 +102,26 @@ The addon generates a unique subdomain for each visited domain:
 - **Output**: 32-character hex string (DNS-compatible)
 - **Format**: `https://{subdomain}.{appDomain}`
 
+### Cookie Filtering
+
+The addon fetches cookie consent data for each domain:
+
+- **Consent URL**: `https://{subdomain}.{appDomain}/?url=https://{domain}/openpims.json`
+- **Response Format**: JSON array with objects containing:
+  - `cookie`: Name of the cookie
+  - `checked`: 0 (blocked) or 1 (allowed)
+- **Filtering Rules**:
+  - If consent data is empty: No cookies are filtered
+  - If consent data exists: Only cookies with `checked=1` are allowed
+  - Both incoming (Set-Cookie) and outgoing (Cookie) headers are filtered
+- **Caching**: Cookie consent data is cached for 5 minutes per domain
+
 ### Cache Behavior
 
 - **Auth Data**: Cached for 5 minutes
+- **Cookie Consent**: Cached for 5 minutes per domain
 - **Failed Requests**: 60-second wait before retry
-- **Timeout Handling**: 15-second timeout for HTTP requests
+- **Timeout Handling**: 15-second timeout for HTTP requests, 5-second for consent data
 
 ## Browser Configuration
 
@@ -155,7 +172,7 @@ The URL format is: `https://{32-char-hex}.{appDomain}` and is different for each
 ### Enable Verbose Logging
 
 ```bash
-mitmdump -s openpims_addon.py \
+mitmdump -s openpims.py \
   --set username=user@example.com \
   --set password=password \
   -v  # Enables debug logging
@@ -198,15 +215,17 @@ mitmdump -s openpims_addon.py \
 ### Script Structure
 
 ```
-openpims_addon.py
-├── OpenPIMSAddon Class
+openpims.py
+├── OpenPIMS Class
 │   ├── load()         # Define options
 │   ├── configure()    # Load credentials
 │   ├── running()      # Activate proxy auth
 │   ├── generate_deterministic_subdomain()  # Generate HMAC-SHA256 subdomain
 │   ├── fetch_openpims_value()  # Load auth data (userId, token, domain) from server
-│   ├── request()      # Add domain-specific headers to requests
-│   └── response()     # Optional: Response logging
+│   ├── fetch_cookie_consent_data()  # Load cookie consent rules for domain
+│   ├── filter_cookies_in_header()  # Filter cookies based on consent
+│   ├── request()      # Add headers and filter outgoing cookies
+│   └── response()     # Filter incoming cookies
 ```
 
 ### Extensions
