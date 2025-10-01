@@ -1,223 +1,253 @@
 # mitmproxy OpenPIMS Addon
 
-Ein mitmproxy-Addon, das automatisch einen `x-openpims` Header zu allen HTTP-Requests hinzufügt und den Proxy mit HTTP Basic Auth schützt.
+A mitmproxy addon that automatically adds domain-specific deterministic `x-openpims` headers to all HTTP requests and protects the proxy with HTTP Basic Auth.
 
 ## Features
 
-- 🔐 **Proxy-Schutz**: HTTP Basic Auth für den mitmproxy
-- 📨 **Header-Injection**: Fügt `x-openpims` Header zu allen Requests hinzu
-- 🔄 **Automatische Updates**: Lädt den Header-Wert alle 5 Minuten neu
-- 💾 **Intelligent Caching**: Vermeidet unnötige API-Calls
-- 🛡️ **Fehlerbehandlung**: Robuste Behandlung von Netzwerkproblemen
-- ⏱️ **Retry-Logik**: Wartet nach Fehlern bevor erneut versucht wird
+- 🔐 **Proxy Protection**: HTTP Basic Auth for mitmproxy
+- 🔑 **Deterministic URLs**: HMAC-SHA256 based subdomain generation
+- 🌐 **Domain-specific**: Each visited domain gets its own OpenPIMS URL
+- 📨 **Header Injection**: Adds `x-openpims` and `X-OpenPIMS` headers to all requests
+- 🔄 **Daily Rotation**: Subdomains are regenerated at midnight UTC
+- 💾 **Intelligent Caching**: Auth data is cached for 5 minutes
+- 🛡️ **Error Handling**: Robust handling of network problems
+- ⏱️ **Retry Logic**: Waits after errors before trying again
 
 ## Installation
 
-### Voraussetzungen
+### Prerequisites
 
 ```bash
+# Install from requirements.txt
+pip install -r requirements.txt
+
+# Or install manually
 pip install mitmproxy requests
 ```
 
-### Repository klonen
+### Clone Repository
 
 ```bash
 git clone <repository-url>
 cd mitmproxy-openpims-addon
 ```
 
-## Verwendung
+## Usage
 
-### Basis-Verwendung
-
-```bash
-mitmdump -s openpims_addon.py --set username=deine@email.de --set password=dein_passwort
-```
-
-### Mit Web-Interface
+### Basic Usage
 
 ```bash
-mitmweb -s openpims_addon.py --set username=deine@email.de --set password=dein_passwort
+mitmdump -s openpims_addon.py --set username=your@email.com --set password=your_password
 ```
 
-### Mit erweiterten Optionen
+### With Web Interface
+
+```bash
+mitmweb -s openpims_addon.py --set username=your@email.com --set password=your_password
+```
+
+### With Advanced Options
 
 ```bash
 mitmdump -s openpims_addon.py \
-  --set username=deine@email.de \
-  --set password=dein_passwort \
+  --set username=your@email.com \
+  --set password=your_password \
   --set openpims_url=https://me.openpims.de \
   -v  # Verbose Logging
 ```
 
-## Konfiguration
+## Configuration
 
-### Verfügbare Optionen
+### Available Options
 
-| Option | Beschreibung | Standard | Erforderlich |
-|--------|--------------|----------|--------------|
-| `username` | E-Mail-Adresse für Basic Auth | - | ✅ |
-| `password` | Passwort für Basic Auth | - | ✅ |
+| Option | Description | Default | Required |
+|--------|-------------|---------|----------|
+| `username` | Email address for Basic Auth | - | ✅ |
+| `password` | Password for Basic Auth | - | ✅ |
 | `openpims_url` | OpenPIMS Service URL | `https://me.openpims.de` | ❌ |
 
-### Beispiel-Konfiguration
+### Example Configuration
 
 ```bash
-# Minimale Konfiguration
+# Minimal configuration
 mitmdump -s openpims_addon.py \
   --set username=user@example.com \
-  --set password=geheim123
+  --set password=secret123
 
-# Mit custom URL
+# With custom URL
 mitmdump -s openpims_addon.py \
   --set username=user@example.com \
-  --set password=geheim123 \
+  --set password=secret123 \
   --set openpims_url=https://custom-openpims.de
 ```
 
-## Funktionsweise
+## How It Works
 
-1. **Startup**: Das Addon lädt beim Start den OpenPIMS-Wert vom konfigurierten Server
-2. **Proxy Auth**: Der mitmproxy wird mit den angegebenen Credentials geschützt
-3. **Header Injection**: Bei jedem Request wird der `x-openpims` Header hinzugefügt
-4. **Auto-Update**: Alle 5 Minuten wird der Wert automatisch aktualisiert
-5. **Fehlerbehandlung**: Bei Fehlern wartet das Addon 60 Sekunden vor dem nächsten Versuch
+1. **Startup**: The addon loads authentication data (userId, token, domain) from the OpenPIMS server at startup
+2. **Proxy Auth**: mitmproxy is protected with the provided credentials
+3. **Subdomain Generation**: A deterministic subdomain is generated for each visited domain using HMAC-SHA256
+4. **Header Injection**: `x-openpims` and `X-OpenPIMS` headers with the domain-specific URL are added to each request
+5. **Daily Rotation**: Subdomains are automatically regenerated at midnight UTC (based on day timestamp)
+6. **Auto-Update**: Auth data is refreshed from the server every 5 minutes
+7. **Error Handling**: The addon waits 60 seconds before retrying after errors
 
-### Cache-Verhalten
+### Deterministic Subdomain Generation
 
-- **Erfolgreiche Requests**: Wert wird 5 Minuten gecacht
-- **Fehlgeschlagene Requests**: 60 Sekunden Wartezeit vor erneutem Versuch
-- **Timeout-Behandlung**: 15 Sekunden Timeout für HTTP-Requests
+The addon generates a unique subdomain for each visited domain:
 
-## Browser-Konfiguration
+- **Algorithm**: HMAC-SHA256 with token as key
+- **Message**: `userId + domain + dayTimestamp`
+- **Output**: 32-character hex string (DNS-compatible)
+- **Format**: `https://{subdomain}.{appDomain}`
 
-### Proxy-Einstellungen
+### Cache Behavior
 
-1. **HTTP-Proxy**: `127.0.0.1:8080`
-2. **Benutzername**: Deine E-Mail-Adresse
-3. **Passwort**: Dein Passwort
-4. **HTTPS-Proxy**: `127.0.0.1:8080` (gleiche Einstellungen)
+- **Auth Data**: Cached for 5 minutes
+- **Failed Requests**: 60-second wait before retry
+- **Timeout Handling**: 15-second timeout for HTTP requests
 
-### Beispiel für Chrome
+## Browser Configuration
+
+### Proxy Settings
+
+1. **HTTP Proxy**: `127.0.0.1:8080`
+2. **Username**: Your email address
+3. **Password**: Your password
+4. **HTTPS Proxy**: `127.0.0.1:8080` (same settings)
+
+### Example for Chrome
 
 ```bash
-# Chrome mit Proxy starten
-google-chrome --proxy-server="http://127.0.0.1:8080" --proxy-auth="user@example.com:passwort"
+# Start Chrome with proxy
+google-chrome --proxy-server="http://127.0.0.1:8080" --proxy-auth="user@example.com:password"
 ```
 
 ## Testing
 
-### Verbindung testen
+### Test Connection
 
 ```bash
-# Mit curl testen
-curl -x http://user%40example.com:passwort@127.0.0.1:8080 -v https://httpbin.org/headers
+# Test with curl
+curl -x http://user%40example.com:password@127.0.0.1:8080 -v https://httpbin.org/headers
 
-# OpenPIMS Service direkt testen
-curl -u "user@example.com:passwort" https://me.openpims.de
+# Test OpenPIMS service directly
+curl -u "user@example.com:password" https://me.openpims.de
 ```
 
-### Header-Injection verifizieren
+### Verify Header Injection
 
-Besuche `https://httpbin.org/headers` über den Proxy und prüfe ob der `x-openpims` Header vorhanden ist.
+Visit `https://httpbin.org/headers` through the proxy and check the injected headers:
+
+- `x-openpims`: Contains the domain-specific OpenPIMS URL
+- `X-OpenPIMS`: Same value for better compatibility
+
+The URL format is: `https://{32-char-hex}.{appDomain}` and is different for each domain.
 
 ## Logging
 
-### Log-Level
+### Log Levels
 
-- **Info**: Startup-Meldungen, erfolgreiche Wert-Ladungen
-- **Warning**: Timeout- und Verbindungsfehler
-- **Error**: Authentifizierungsfehler, kritische Fehler
-- **Debug**: Detaillierte Request/Response-Informationen
+- **Info**: Startup messages, successful value loads
+- **Warning**: Timeout and connection errors
+- **Error**: Authentication errors, critical failures
+- **Debug**: Detailed request/response information
 
-### Verbose Logging aktivieren
+### Enable Verbose Logging
 
 ```bash
 mitmdump -s openpims_addon.py \
   --set username=user@example.com \
-  --set password=passwort \
-  -v  # Aktiviert Debug-Logging
+  --set password=password \
+  -v  # Enables debug logging
 ```
 
-## Häufige Probleme
+## Common Problems
 
 ### "Maximum recursion depth exceeded"
 
-**Problem**: Rekursionsfehler beim Start  
-**Lösung**: Verwende die neueste Version des Scripts - das Problem wurde in v1.1 behoben
+**Problem**: Recursion error at startup
+**Solution**: Use the latest version of the script - this issue was fixed in v1.1
 
 ### "Read timed out"
 
-**Problem**: OpenPIMS Server antwortet nicht  
-**Lösung**: 
-- Prüfe die Internetverbindung
-- Teste den Service direkt: `curl -u "email:pass" https://me.openpims.de`
-- Das Addon wartet automatisch 60 Sekunden vor erneutem Versuch
+**Problem**: OpenPIMS server not responding
+**Solution**:
+- Check internet connection
+- Test the service directly: `curl -u "email:pass" https://me.openpims.de`
+- The addon automatically waits 60 seconds before retrying
 
-### "Authentifizierung fehlgeschlagen"
+### "Authentication failed"
 
-**Problem**: 401 Unauthorized vom OpenPIMS Service  
-**Lösung**: 
-- Prüfe E-Mail-Adresse und Passwort
-- Teste die Credentials direkt mit curl
-- Verwende URL-Encoding für Sonderzeichen: `@` wird zu `%40`
+**Problem**: 401 Unauthorized from OpenPIMS service
+**Solution**:
+- Check email address and password
+- Test credentials directly with curl
+- Use URL encoding for special characters: `@` becomes `%40`
 
-### "Kein OpenPIMS Wert verfügbar"
+### "No OpenPIMS data available"
 
-**Problem**: Header wird nicht hinzugefügt  
-**Lösung**: 
-- Prüfe die Logs auf Fehlermeldungen
-- Stelle sicher, dass der OpenPIMS Service erreichbar ist
-- Bei Debug-Logging erscheint diese Meldung häufiger (ist normal)
+**Problem**: Header not being added
+**Solution**:
+- Check logs for error messages
+- Ensure the OpenPIMS service is reachable
+- Check that server returns JSON with userId, token, and domain
+- This message appears more frequently with debug logging (this is normal)
 
-## Entwicklung
+## Development
 
-### Script-Struktur
+### Script Structure
 
 ```
 openpims_addon.py
 ├── OpenPIMSAddon Class
-│   ├── load()         # Optionen definieren
-│   ├── configure()    # Credentials laden
-│   ├── running()      # Proxy Auth aktivieren
-│   ├── fetch_openpims_value()  # Wert vom Server laden
-│   ├── request()      # Header zu Requests hinzufügen
-│   └── response()     # Optional: Response Logging
+│   ├── load()         # Define options
+│   ├── configure()    # Load credentials
+│   ├── running()      # Activate proxy auth
+│   ├── generate_deterministic_subdomain()  # Generate HMAC-SHA256 subdomain
+│   ├── fetch_openpims_value()  # Load auth data (userId, token, domain) from server
+│   ├── request()      # Add domain-specific headers to requests
+│   └── response()     # Optional: Response logging
 ```
 
-### Erweiterungen
+### Extensions
 
-Das Script kann leicht erweitert werden:
+The script can be easily extended:
 
 ```python
-# Mehrere Header hinzufügen
-flow.request.headers["x-custom-header"] = "custom-value"
+# Modify User-Agent
+flow.request.headers["User-Agent"] += f" OpenPIMS/1.0 (+{openpims_url})"
 
-# Request-Filtering
+# Request filtering
 if "example.com" in flow.request.pretty_host:
-    # Nur für bestimmte Domains
+    # Only for specific domains
+
+# Implement subdomain cache (for better performance)
+subdomain_cache = {}  # domain -> (subdomain, timestamp)
 ```
 
-## Sicherheit
+## Security
 
-- ⚠️ **Credentials**: E-Mail und Passwort werden als Kommandozeilen-Parameter übergeben
-- 🔐 **HTTPS**: Verbindungen zum OpenPIMS Service verwenden SSL/TLS
-- 🛡️ **Auth**: Proxy ist durch HTTP Basic Auth geschützt
-- 💾 **Speicherung**: Keine dauerharte Speicherung von Credentials
+- ⚠️ **Credentials**: Email and password are passed as command-line parameters
+- 🔐 **HTTPS**: Connections to OpenPIMS service use SSL/TLS
+- 🛡️ **Auth**: Proxy is protected by HTTP Basic Auth
+- 🔑 **HMAC**: Token is only used as HMAC key, never sent in plaintext
+- 🌐 **Domain Isolation**: Each domain gets its own unique subdomain
+- 💾 **Storage**: No persistent storage of credentials
 
-## Lizenz
+## License
 
-MIT License - siehe LICENSE Datei für Details
+MIT License - see LICENSE file for details
 
 ## Support
 
-Bei Problemen:
+For issues:
 
-1. Prüfe die Logs auf Fehlermeldungen
-2. Teste die Verbindung zum OpenPIMS Service
-3. Erstelle ein Issue mit vollständigen Log-Ausgaben
+1. Check logs for error messages
+2. Test connection to OpenPIMS service
+3. Create an issue with complete log output
 
 ---
 
-**Version**: 1.1  
-**Letzte Aktualisierung**: August 2025
+**Version**: 2.0
+**Last Updated**: October 2025
+**Changes**: Deterministic domain-specific subdomains with HMAC-SHA256
