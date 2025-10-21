@@ -1,18 +1,18 @@
-# mitmproxy OpenPIMS Addon
+# mitmproxy OpenPIMS Addon (Passwordless v3.0)
 
-A mitmproxy addon that automatically adds domain-specific deterministic `x-openpims` headers to all HTTP requests, filters cookies based on consent data, and protects the proxy with HTTP Basic Auth.
+A mitmproxy addon that automatically adds domain-specific deterministic `x-openpims` headers to all HTTP requests and filters cookies based on consent data. **Now passwordless** - no more email/password needed!
 
 ## Features
 
-- 🔐 **Proxy Protection**: HTTP Basic Auth for mitmproxy
+- 🚫 **Passwordless**: Use userId + token directly from dashboard
 - 🔑 **Deterministic URLs**: HMAC-SHA256 based subdomain generation
 - 🌐 **Domain-specific**: Each visited domain gets its own OpenPIMS URL
 - 📨 **Header Injection**: Adds `x-openpims` and `X-OpenPIMS` headers to all requests
 - 🍪 **Cookie Filtering**: Filters cookies based on domain-specific consent data
 - 🔄 **Daily Rotation**: Subdomains are regenerated at midnight UTC
-- 💾 **Intelligent Caching**: Auth data and cookie consent cached for 5 minutes
+- 💾 **Intelligent Caching**: Cookie consent cached for 5 minutes
+- 🔐 **Optional Proxy Auth**: Protect proxy with HTTP Basic Auth (optional)
 - 🛡️ **Error Handling**: Robust handling of network problems
-- ⏱️ **Retry Logic**: Waits after errors before trying again
 
 ## Installation
 
@@ -33,27 +33,47 @@ git clone <repository-url>
 cd mitmproxy-openpims-addon
 ```
 
+## Getting Your Credentials
+
+**New passwordless flow:**
+
+1. Visit your OpenPIMS provider login (e.g., `https://openpims.de/login` or `https://openpims.eu/login`)
+2. Enter your email address
+3. Click magic link from email (no password needed!)
+4. Copy these values from your dashboard:
+   - **User ID**: e.g. `123`
+   - **Token**: 32 characters, e.g. `abc123...xyz`
+   - **Domain**: Your provider's domain, e.g. `openpims.de` or `openpims.eu`
+
 ## Usage
 
 ### Basic Usage
 
 ```bash
-mitmdump -s openpims.py --set username=your@email.com --set password=your_password
+mitmdump -s openpims.py \
+  --set user_id=YOUR_USER_ID \
+  --set token=YOUR_32_CHAR_TOKEN \
+  --set app_domain=YOUR_PROVIDER_DOMAIN  # e.g., openpims.de or openpims.eu
 ```
 
 ### With Web Interface
 
 ```bash
-mitmweb -s openpims.py --set username=your@email.com --set password=your_password
+mitmweb -s openpims.py \
+  --set user_id=123 \
+  --set token=abc123def456... \
+  --set app_domain=openpims.de
 ```
 
-### With Advanced Options
+### With Optional Proxy Authentication
 
 ```bash
 mitmdump -s openpims.py \
-  --set username=your@email.com \
-  --set password=your_password \
-  --set openpims_url=https://me.openpims.de \
+  --set user_id=123 \
+  --set token=abc123def456... \
+  --set app_domain=openpims.de \
+  --set proxy_username=myuser \
+  --set proxy_password=mypass \
   -v  # Verbose Logging
 ```
 
@@ -63,35 +83,44 @@ mitmdump -s openpims.py \
 
 | Option | Description | Default | Required |
 |--------|-------------|---------|----------|
-| `username` | Email address for Basic Auth | - | ✅ |
-| `password` | Password for Basic Auth | - | ✅ |
-| `openpims_url` | OpenPIMS Service URL | `https://me.openpims.de` | ❌ |
+| `user_id` | OpenPIMS User ID from dashboard | - | ✅ |
+| `token` | OpenPIMS Token (32 chars) from dashboard | - | ✅ |
+| `app_domain` | OpenPIMS App Domain | `openpims.de` | ❌ |
+| `proxy_username` | Optional: Username for proxy auth | - | ❌ |
+| `proxy_password` | Optional: Password for proxy auth | - | ❌ |
 
 ### Example Configuration
 
 ```bash
-# Minimal configuration
+# Minimal configuration (no proxy auth, uses default openpims.de)
 mitmdump -s openpims.py \
-  --set username=user@example.com \
-  --set password=secret123
+  --set user_id=123 \
+  --set token=abc123def456...
 
-# With custom URL
+# With different provider (e.g., openpims.eu)
 mitmdump -s openpims.py \
-  --set username=user@example.com \
-  --set password=secret123 \
-  --set openpims_url=https://custom-openpims.de
+  --set user_id=123 \
+  --set token=abc123def456... \
+  --set app_domain=openpims.eu
+
+# With proxy authentication
+mitmdump -s openpims.py \
+  --set user_id=123 \
+  --set token=abc123def456... \
+  --set proxy_username=proxyuser \
+  --set proxy_password=proxypass
 ```
 
 ## How It Works
 
-1. **Startup**: The addon loads authentication data (userId, token, domain) from the OpenPIMS server at startup
-2. **Proxy Auth**: mitmproxy is protected with the provided credentials
+1. **Startup**: The addon receives authentication data (userId, token, domain) from command line
+2. **Proxy Auth (Optional)**: mitmproxy can be protected with proxy_username/proxy_password
 3. **Subdomain Generation**: A deterministic subdomain is generated for each visited domain using HMAC-SHA256
 4. **Header Injection**: `x-openpims` and `X-OpenPIMS` headers with the domain-specific URL are added to each request
 5. **Cookie Filtering**: Fetches cookie consent data from OpenPIMS service and filters both incoming and outgoing cookies
 6. **Daily Rotation**: Subdomains are automatically regenerated at midnight UTC (based on day timestamp)
-7. **Auto-Update**: Auth data is refreshed from the server every 5 minutes
-8. **Error Handling**: The addon waits 60 seconds before retrying after errors
+7. **Caching**: Cookie consent is cached for 5 minutes per domain
+8. **Error Handling**: Robust handling of network issues and timeouts
 
 ### Deterministic Subdomain Generation
 
@@ -144,11 +173,11 @@ google-chrome --proxy-server="http://127.0.0.1:8080" --proxy-auth="user@example.
 ### Test Connection
 
 ```bash
-# Test with curl
-curl -x http://user%40example.com:password@127.0.0.1:8080 -v https://httpbin.org/headers
+# Test with curl (no proxy auth)
+curl -x http://127.0.0.1:8080 -v https://httpbin.org/headers
 
-# Test OpenPIMS service directly
-curl -u "user@example.com:password" https://me.openpims.de
+# Test with curl (with proxy auth)
+curl -x http://proxyuser:proxypass@127.0.0.1:8080 -v https://httpbin.org/headers
 ```
 
 ### Verify Header Injection
@@ -185,21 +214,21 @@ mitmdump -s openpims.py \
 **Problem**: Recursion error at startup
 **Solution**: Use the latest version of the script - this issue was fixed in v1.1
 
-### "Read timed out"
+### "user_id, token, and app_domain must be set!"
 
-**Problem**: OpenPIMS server not responding
+**Problem**: Missing credentials
 **Solution**:
-- Check internet connection
-- Test the service directly: `curl -u "email:pass" https://me.openpims.de`
-- The addon automatically waits 60 seconds before retrying
+- Login to your provider's login page via magic link (e.g., https://openpims.de/login or https://openpims.eu/login)
+- Copy userId, token, and domain from dashboard
+- Use all three values in command line parameters
 
-### "Authentication failed"
+### "No OpenPIMS data configured"
 
-**Problem**: 401 Unauthorized from OpenPIMS service
+**Problem**: Credentials not set or invalid
 **Solution**:
-- Check email address and password
-- Test credentials directly with curl
-- Use URL encoding for special characters: `@` becomes `%40`
+- Double-check user_id (should be a number like `123`)
+- Double-check token (should be 32 characters)
+- Ensure app_domain is correct (default: `openpims.de`)
 
 ### "No OpenPIMS data available"
 
@@ -246,16 +275,41 @@ subdomain_cache = {}  # domain -> (subdomain, timestamp)
 
 ## Security
 
-- ⚠️ **Credentials**: Email and password are passed as command-line parameters
+- ⚠️ **Credentials**: userId and token are passed as command-line parameters (consider using environment variables)
 - 🔐 **HTTPS**: Connections to OpenPIMS service use SSL/TLS
-- 🛡️ **Auth**: Proxy is protected by HTTP Basic Auth
+- 🛡️ **Proxy Auth**: Optional HTTP Basic Auth for proxy protection
 - 🔑 **HMAC**: Token is only used as HMAC key, never sent in plaintext
 - 🌐 **Domain Isolation**: Each domain gets its own unique subdomain
 - 💾 **Storage**: No persistent storage of credentials
+- 🚫 **Passwordless**: No passwords stored or transmitted
 
 ## License
 
 Apache License 2.0 - see LICENSE file for details
+
+## Multi-Provider Support
+
+OpenPIMS supports multiple PIMS providers. Users can have accounts on different providers:
+
+- `openpims.de` (default)
+- `openpims.eu`
+- Custom self-hosted instances
+
+Simply specify the correct `app_domain` when running mitmproxy:
+
+```bash
+# For openpims.eu users
+mitmdump -s openpims.py \
+  --set user_id=123 \
+  --set token=abc... \
+  --set app_domain=openpims.eu
+
+# For self-hosted instances
+mitmdump -s openpims.py \
+  --set user_id=123 \
+  --set token=abc... \
+  --set app_domain=my-pims.example.com
+```
 
 ## Support
 
@@ -267,6 +321,10 @@ For issues:
 
 ---
 
-**Version**: 2.0
+**Version**: 3.0
 **Last Updated**: October 2025
-**Changes**: Deterministic domain-specific subdomains with HMAC-SHA256
+**Changes**:
+- **v3.0**: Passwordless authentication - removed email/password, now uses userId/token/domain directly
+- **v2.0**: Deterministic domain-specific subdomains with HMAC-SHA256
+
+**Multi-Provider Support**: Works with any OpenPIMS provider (openpims.de, openpims.eu, self-hosted instances)

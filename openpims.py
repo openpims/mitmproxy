@@ -13,14 +13,14 @@
 # limitations under the License.
 
 """
-Mitmproxy addon for deterministic x-openpims header with Basic Auth protection and cookie filtering
+Mitmproxy addon for deterministic x-openpims header with cookie filtering (Passwordless version)
 
 The addon:
-1. Protects the proxy with HTTP Basic Auth
-2. Loads authentication data (userId, token, domain) from me.openpims.de
-3. Generates domain-specific deterministic subdomains with HMAC-SHA256
-4. Adds x-openpims and X-OpenPIMS headers to all requests
-5. Filters cookies based on domain-specific consent data from OpenPIMS service
+1. Uses OpenPIMS credentials (userId, token, domain) from command line
+2. Generates domain-specific deterministic subdomains with HMAC-SHA256
+3. Adds x-openpims and X-OpenPIMS headers to all requests
+4. Filters cookies based on domain-specific consent data from OpenPIMS service
+5. Optional: Protects the proxy with HTTP Basic Auth
 
 The subdomains are:
 - Deterministic (same input → same subdomain within a day)
@@ -33,7 +33,9 @@ Cookie filtering:
 - Only allows cookies where checked=1 in the consent data
 
 Usage:
-mitmdump -s openpims.py --set username=your@email.com --set password=your_pass
+mitmdump -s openpims.py --set user_id=123 --set token=your_32_char_token --set app_domain=openpims.de
+
+Get your credentials from the OpenPIMS dashboard after logging in via magic link.
 """
 
 import base64
@@ -69,13 +71,7 @@ class OpenPIMS:
         self.user_id: Optional[str] = None
         self.token: Optional[str] = None
         self.app_domain: Optional[str] = None
-        self.username: Optional[str] = None
-        self.password: Optional[str] = None
         self.last_fetch_time: float = 0
-        self.last_fetch_attempt: float = 0
-        self.fetch_interval: int = 300  # 5 minutes cache
-        self.retry_interval: int = 60   # 1 minute retry after error
-        self.fetch_lock = threading.Lock()
         self.fetch_failed: bool = False
 
         # Cookie consent caching
@@ -87,44 +83,63 @@ class OpenPIMS:
     def load(self, loader):
         """Loads the configuration"""
         loader.add_option(
-            name="username",
+            name="user_id",
             typespec=str,
             default="",
-            help="Email address for Basic Auth (proxy and OpenPIMS service)"
+            help="OpenPIMS User ID (from dashboard)"
         )
         loader.add_option(
-            name="password",
+            name="token",
             typespec=str,
             default="",
-            help="Password for Basic Auth (proxy and OpenPIMS service)"
+            help="OpenPIMS Token (32 characters, from dashboard)"
         )
         loader.add_option(
-            name="openpims_url",
+            name="app_domain",
             typespec=str,
-            default="https://me.openpims.de",
-            help="OpenPIMS Service URL"
+            default="openpims.de",
+            help="OpenPIMS App Domain"
+        )
+        loader.add_option(
+            name="proxy_username",
+            typespec=str,
+            default="",
+            help="Optional: Username for proxy authentication"
+        )
+        loader.add_option(
+            name="proxy_password",
+            typespec=str,
+            default="",
+            help="Optional: Password for proxy authentication"
         )
 
     def configure(self, updates):
         """Configures the addon"""
-        self.username = ctx.options.username
-        self.password = ctx.options.password
+        # Get OpenPIMS credentials from command line
+        self.user_id = ctx.options.user_id
+        self.token = ctx.options.token
+        self.app_domain = ctx.options.app_domain
 
-        if not self.username or not self.password:
-            ctx.log.error("Email address and password must be set!")
+        if not self.user_id or not self.token or not self.app_domain:
+            ctx.log.error("user_id, token, and app_domain must be set!")
+            ctx.log.error("Get these values from your OpenPIMS dashboard")
             return
 
-        ctx.log.info(f"Addon configured for email: {self.username}")
+        ctx.log.info(f"Addon configured: User ID {self.user_id}, Domain {self.app_domain}")
 
-        # Initially load the OpenPIMS value
-        self.fetch_openpims_value()
+        # No need to fetch from server - we have everything directly
+        self.last_fetch_time = time.time()
+        self.fetch_failed = False
 
     def running(self):
         """Called when mitmproxy starts"""
-        if self.username and self.password:
-            # Set proxy auth here to avoid recursion
-            ctx.options.proxyauth = f"{self.username}:{self.password}"
-            ctx.log.info(f"Proxy auth activated for email: {self.username}")
+        proxy_user = ctx.options.proxy_username
+        proxy_pass = ctx.options.proxy_password
+
+        if proxy_user and proxy_pass:
+            # Optional: Set proxy auth if provided
+            ctx.options.proxyauth = f"{proxy_user}:{proxy_pass}"
+            ctx.log.info(f"Proxy auth activated for user: {proxy_user}")
 
     def generate_deterministic_subdomain(self, domain: str) -> Optional[str]:
         """Generates deterministic subdomain with HMAC-SHA256"""
@@ -251,122 +266,14 @@ class OpenPIMS:
             else:
                 return None
 
-    def fetch_openpims_value(self) -> bool:
-        """Loads the OpenPIMS value from the server"""
-        if not self.username or not self.password:
-            ctx.log.error("Email address and password not available")
-            return False
-
-        current_time = time.time()
-
-        # Check cache
-        if (self.user_id and self.token and self.app_domain and
-            current_time - self.last_fetch_time < self.fetch_interval):
-            return True
-
-        # Check if we're retrying too soon after an error
-        if (self.fetch_failed and
-            current_time - self.last_fetch_attempt < self.retry_interval):
-            return False
-
-        with self.fetch_lock:
-            # Double-check after lock
-            if (self.user_id and self.token and self.app_domain and
-                current_time - self.last_fetch_time < self.fetch_interval):
-                return True
-
-            # Retry check after lock
-            if (self.fetch_failed and
-                current_time - self.last_fetch_attempt < self.retry_interval):
-                return False
-
-            try:
-                ctx.log.info("Loading OpenPIMS value from server...")
-                self.last_fetch_attempt = current_time
-
-                # Create Basic Auth header
-                credentials = base64.b64encode(
-                    f"{self.username}:{self.password}".encode()
-                ).decode()
-                
-                headers = {
-                    "Authorization": f"Basic {credentials}",
-                    "User-Agent": "mitmproxy-openpims-addon/1.0"
-                }
-                
-                # Optionally disable SSL verification for .test domains
-                verify_ssl = not ctx.options.openpims_url.endswith('.test')
-
-                response = requests.get(
-                    ctx.options.openpims_url,
-                    headers=headers,
-                    timeout=15,  # Increased to 15 seconds
-                    verify=verify_ssl  # SSL verification (disabled for .test)
-                )
-                
-                if response.status_code == 200:
-                    try:
-                        data = response.json()
-                        self.user_id = data.get('userId')
-                        self.token = data.get('token')
-                        self.app_domain = data.get('domain')
-
-                        if not all([self.user_id, self.token, self.app_domain]):
-                            ctx.log.error("Incomplete data received from server")
-                            self.fetch_failed = True
-                            return False
-
-                        self.last_fetch_time = current_time
-                        self.fetch_failed = False
-                        ctx.log.info(f"OpenPIMS data successfully loaded: User {self.user_id}, Domain {self.app_domain}")
-                        return True
-                    except json.JSONDecodeError:
-                        ctx.log.error("Error parsing JSON response")
-                        self.fetch_failed = True
-                        return False
-                elif response.status_code == 401:
-                    ctx.log.error("Authentication failed - check email address/password")
-                    self.fetch_failed = True
-                    return False
-                else:
-                    ctx.log.error(f"HTTP error loading OpenPIMS value: {response.status_code}")
-                    self.fetch_failed = True
-                    return False
-
-            except requests.exceptions.Timeout:
-                ctx.log.warn(f"Timeout loading OpenPIMS value - retry in {self.retry_interval} seconds")
-                self.fetch_failed = True
-                return False
-            except requests.exceptions.ConnectionError:
-                ctx.log.warn(f"Connection error to {ctx.options.openpims_url} - server not reachable")
-                self.fetch_failed = True
-                return False
-            except requests.exceptions.RequestException as e:
-                ctx.log.error(f"Network error loading OpenPIMS value: {e}")
-                self.fetch_failed = True
-                return False
-            except Exception as e:
-                ctx.log.error(f"Unexpected error: {e}")
-                self.fetch_failed = True
-                return False
+    # fetch_openpims_value() removed - credentials are now provided directly via command line
 
     def request(self, flow: http.HTTPFlow) -> None:
         """Called for every request - adds headers and filters outgoing cookies"""
-        # Only try to load if no value exists yet or cache expired
-        current_time = time.time()
-        should_fetch = (
-            not all([self.user_id, self.token, self.app_domain]) or
-            (current_time - self.last_fetch_time >= self.fetch_interval)
-        ) and (
-            not self.fetch_failed or
-            (current_time - self.last_fetch_attempt >= self.retry_interval)
-        )
-
-        if should_fetch:
-            success = self.fetch_openpims_value()
-            if not success and not all([self.user_id, self.token, self.app_domain]):
-                ctx.log.debug(f"No OpenPIMS data available for {flow.request.pretty_host}")
-                return
+        # Check if we have all required data
+        if not all([self.user_id, self.token, self.app_domain]):
+            ctx.log.debug(f"No OpenPIMS data configured for {flow.request.pretty_host}")
+            return
 
         # Generate domain-specific subdomain
         if self.user_id and self.token and self.app_domain:
@@ -379,7 +286,17 @@ class OpenPIMS:
                 # X-OpenPIMS header for better compatibility
                 flow.request.headers["X-OpenPIMS"] = openpims_url
 
-                ctx.log.debug(f"OpenPIMS headers added to {flow.request.pretty_host}: {openpims_url}")
+                # Add OpenPIMS signal to User-Agent
+                if "User-Agent" in flow.request.headers:
+                    original_ua = flow.request.headers["User-Agent"]
+                    # Only append if not already present
+                    if "OpenPIMS" not in original_ua:
+                        flow.request.headers["User-Agent"] = f"{original_ua} OpenPIMS/2.0 ({openpims_url})"
+                else:
+                    # No User-Agent present, create one
+                    flow.request.headers["User-Agent"] = f"mitmproxy OpenPIMS/2.0 ({openpims_url})"
+
+                ctx.log.debug(f"OpenPIMS headers and User-Agent added to {flow.request.pretty_host}: {openpims_url}")
 
                 # Fetch cookie consent data and filter outgoing cookies
                 consent_data = self.fetch_cookie_consent_data(flow.request.pretty_host, subdomain)
@@ -445,9 +362,18 @@ if __name__ == "__main__":
     """
     Script can be run directly for testing
     """
-    print("OpenPIMS Mitmproxy Addon - Deterministic HMAC-SHA256 with Cookie Filtering")
-    print("Usage:")
-    print("mitmdump -s openpims.py --set username=your@email.com --set password=your_pass")
-    print("\nOptional parameters:")
-    print("--set openpims_url=https://other-url.com")
-    print("-v  # For verbose logging")
+    print("OpenPIMS Mitmproxy Addon - Passwordless Version (v3.0)")
+    print("="*60)
+    print("\nUsage:")
+    print("mitmdump -s openpims.py \\")
+    print("  --set user_id=YOUR_USER_ID \\")
+    print("  --set token=YOUR_32_CHAR_TOKEN \\")
+    print("  --set app_domain=openpims.de")
+    print("\nGet your credentials:")
+    print("1. Visit https://openpims.de/login")
+    print("2. Login via magic link (no password needed)")
+    print("3. Copy userId, token, and domain from dashboard")
+    print("\nOptional proxy authentication:")
+    print("--set proxy_username=user --set proxy_password=pass")
+    print("\nVerbose logging:")
+    print("-v")
